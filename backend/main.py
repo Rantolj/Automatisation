@@ -25,9 +25,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import tempfile
 from datetime import datetime
+from pathlib import Path
 
-# Import du service de traitement
+# Import des services de traitement
 from services.file_processor import FileProcessor
+from services.statistical_summary import StatisticalSummaryService
 
 # =============================================================================
 # INITIALISATION DE L'APPLICATION
@@ -57,8 +59,12 @@ OUTPUT_DIR = "outputs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Instance du service de traitement
+# Instances des services de traitement
 processor = FileProcessor()
+statistical_service = StatisticalSummaryService()
+
+# Extensions pour le résumé statistique (V1)
+STATISTICAL_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
 
 
 # =============================================================================
@@ -163,22 +169,23 @@ async def process_file(file: UploadFile = File(...)):
     """
     Endpoint principal - Upload + Traitement en une seule requête
     
-    C'est l'endpoint clé de la Phase 1 :
+    C'est l'endpoint clé de la V1 :
         1. Reçoit le fichier
-        2. Analyse son contenu
-        3. Applique un traitement basique
-        4. Retourne le résultat
+        2. Détecte le type (Excel, CSV, autre)
+        3. Applique le traitement approprié
+        4. Retourne le résultat structuré
     
-    Traitement actuel (exemple) :
-        - Fichiers texte (.txt, .csv) : compte de lignes, mots, caractères
-        - Fichiers JSON : validation et extraction de structure
-        - Autres : métadonnées basiques
+    Traitement V1 :
+        - Excel/CSV : Résumé statistique complet (structure, colonnes, alertes)
+        - Texte : Comptage lignes/mots/caractères
+        - JSON : Validation et structure
+        - Autres : Métadonnées basiques
     
     Args:
-        file: Fichier à traiter
+        file: Fichier à traiter (Excel, CSV, ou autre)
     
     Returns:
-        JSON avec le résultat du traitement
+        JSON avec le résumé statistique ou résultat de traitement
     """
     
     if not file.filename:
@@ -193,13 +200,24 @@ async def process_file(file: UploadFile = File(...)):
             detail=f"Erreur de lecture : {str(e)}"
         )
     
-    # Délégation au service de traitement
+    # Détection de l'extension pour router vers le bon service
+    extension = Path(file.filename).suffix.lower()
+    
     try:
-        result = processor.process(
-            filename=file.filename,
-            content=contents,
-            content_type=file.content_type
-        )
+        # Fichiers tabulaires (Excel, CSV) → Résumé Statistique V1
+        if extension in STATISTICAL_EXTENSIONS:
+            result = statistical_service.analyze(
+                filename=file.filename,
+                content=contents,
+                content_type=file.content_type
+            )
+        # Autres fichiers → Traitement basique
+        else:
+            result = processor.process(
+                filename=file.filename,
+                content=contents,
+                content_type=file.content_type
+            )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -207,8 +225,9 @@ async def process_file(file: UploadFile = File(...)):
         )
     
     return {
-        "success": True,
+        "success": result.get("success", True),
         "filename": file.filename,
+        "file_size": _format_size(len(contents)),
         "processing_result": result,
         "processed_at": datetime.now().isoformat()
     }
