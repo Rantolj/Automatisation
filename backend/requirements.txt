@@ -48,15 +48,29 @@ pydantic==2.5.3
 #   - Gère les formulaires avec fichiers
 python-multipart==0.0.6
 
+# -----------------------------------------------------------------------------
+# ANALYSE DE DONNÉES (V1 - Résumé Statistique)
+# -----------------------------------------------------------------------------
+# pandas : Manipulation et analyse de données tabulaires
+# Justification :
+#   - Standard de facto pour l'analyse de données Python
+#   - Lecture native des CSV
+#   - Calculs statistiques intégrés (mean, median, etc.)
+#   - Détection automatique des types de données
+pandas==2.2.0
+
+# openpyxl : Lecture/écriture de fichiers Excel (.xlsx)
+# Justification :
+#   - Requis par pandas pour lire les fichiers Excel
+#   - Format Excel le plus courant
+openpyxl==3.1.2
+
 
 # =============================================================================
-# DÉPENDANCES OPTIONNELLES (Phase 2)
+# DÉPENDANCES OPTIONNELLES (Phase 2+)
 # =============================================================================
-# Les dépendances suivantes seront ajoutées en Phase 2 :
+# Les dépendances suivantes seront ajoutées ultérieurement :
 #
-# # Lecture/écriture Excel
-# openpyxl==3.1.2
-# 
 # # Extraction de texte PDF
 # PyPDF2==3.0.1
 # # ou pypdf==4.0.0 (plus récent)
