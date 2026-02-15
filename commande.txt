@@ -1,0 +1,14 @@
+# 1. Aller dans le dossier backend
+cd c:\Users\miran\Documents\miranto\Automatisation\backend
+
+# 2. Créer l'environnement virtuel
+python -m venv venv
+
+# 3. Activer
+.\venv\Scripts\Activate.ps1
+
+# 4. Installer les dépendances
+pip install -r requirements.txt
+
+# 5. Lancer le serveur
+python main.py

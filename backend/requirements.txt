@@ -1,0 +1,76 @@
+# =============================================================================
+# DÉPENDANCES - Phase 1 (Proof of Concept)
+# =============================================================================
+# 
+# Philosophie : Minimum de dépendances, maximum de bibliothèques standard
+# Chaque dépendance est justifiée ci-dessous.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# FRAMEWORK WEB
+# -----------------------------------------------------------------------------
+# FastAPI : Framework web moderne, rapide, avec validation automatique
+# Justification : 
+#   - Plus performant que Flask (basé sur Starlette)
+#   - Documentation auto-générée (Swagger/OpenAPI)
+#   - Validation native avec Pydantic
+#   - Support async natif
+#   - Typage Python moderne
+fastapi==0.109.0
+
+# -----------------------------------------------------------------------------
+# SERVEUR ASGI
+# -----------------------------------------------------------------------------
+# Uvicorn : Serveur ASGI performant pour exécuter FastAPI
+# Justification :
+#   - Recommandé officiellement pour FastAPI
+#   - Support async/await
+#   - Rechargement à chaud en développement
+uvicorn[standard]==0.27.0
+
+# -----------------------------------------------------------------------------
+# VALIDATION (inclus avec FastAPI, mais explicité)
+# -----------------------------------------------------------------------------
+# Pydantic : Validation et sérialisation de données
+# Justification :
+#   - Requis par FastAPI
+#   - Validation de schémas JSON
+#   - Conversion automatique de types
+pydantic==2.5.3
+
+# -----------------------------------------------------------------------------
+# UPLOAD DE FICHIERS
+# -----------------------------------------------------------------------------
+# python-multipart : Parsing des requêtes multipart/form-data
+# Justification :
+#   - Requis pour les uploads de fichiers avec FastAPI
+#   - Gère les formulaires avec fichiers
+python-multipart==0.0.6
+
+
+# =============================================================================
+# DÉPENDANCES OPTIONNELLES (Phase 2)
+# =============================================================================
+# Les dépendances suivantes seront ajoutées en Phase 2 :
+#
+# # Lecture/écriture Excel
+# openpyxl==3.1.2
+# 
+# # Extraction de texte PDF
+# PyPDF2==3.0.1
+# # ou pypdf==4.0.0 (plus récent)
+#
+# # Manipulation d'images
+# Pillow==10.2.0
+#
+# # Tests
+# pytest==8.0.0
+# pytest-asyncio==0.23.0
+# httpx==0.26.0  # Client HTTP async pour tests
+#
+# # Sécurité / Authentification (Phase 2)
+# python-jose[cryptography]==3.3.0  # JWT
+# passlib[bcrypt]==1.7.4  # Hash de mots de passe
+#
+# =============================================================================
