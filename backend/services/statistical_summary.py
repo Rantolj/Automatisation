@@ -44,6 +44,11 @@ class StatisticalSummaryService:
     
     # Extensions supportées
     SUPPORTED_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
+
+    # Limites MVP (évite traitements trop lourds en synchrone)
+    MAX_ROWS = 10_000
+    MAX_COLUMNS = 200
+    MAX_CELLS = 2_000_000
     
     # Seuils pour les alertes
     LOW_FILL_RATE_THRESHOLD = 50  # % en dessous duquel on alerte
@@ -76,13 +81,20 @@ class StatisticalSummaryService:
         if extension not in self.SUPPORTED_EXTENSIONS:
             return {
                 "success": False,
-                "error": f"Format non supporté: {extension}",
-                "supported_formats": list(self.SUPPORTED_EXTENSIONS)
+                "error_code": "UNSUPPORTED_FORMAT",
+                "message": f"Format non supporté: {extension}",
+                "hint": "Formats acceptés : .csv, .xlsx, .xls",
+                "details": {"supported_formats": sorted(self.SUPPORTED_EXTENSIONS)},
             }
         
         try:
             # Lecture du fichier en DataFrame pandas
             df = self._read_file(content, extension)
+
+            # Validation des limites (MVP)
+            limit_error = self._validate_limits(df)
+            if limit_error is not None:
+                return limit_error
             
             # Génération du résumé complet
             summary = self._generate_summary(df)
@@ -98,8 +110,10 @@ class StatisticalSummaryService:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Erreur d'analyse: {str(e)}",
-                "extension": extension
+                "error_code": "ANALYSIS_FAILED",
+                "message": "Erreur d'analyse",
+                "hint": "Vérifiez que le fichier est un Excel/CSV valide et non corrompu.",
+                "details": {"reason": str(e), "extension": extension},
             }
     
     def _read_file(self, content: bytes, extension: str) -> pd.DataFrame:
@@ -118,11 +132,9 @@ class StatisticalSummaryService:
         
         if extension == '.csv':
             # Détection automatique de l'encodage et du séparateur
-            try:
-                df = pd.read_csv(buffer, encoding='utf-8')
-            except UnicodeDecodeError:
-                buffer.seek(0)
-                df = pd.read_csv(buffer, encoding='latin-1')
+            text, encoding = self._decode_csv(content)
+            delimiter = self._sniff_delimiter(text)
+            df = pd.read_csv(io.StringIO(text), encoding=encoding, sep=delimiter)
         
         elif extension in ['.xlsx', '.xls']:
             df = pd.read_excel(buffer, engine='openpyxl')
@@ -131,6 +143,48 @@ class StatisticalSummaryService:
             raise ValueError(f"Format non géré: {extension}")
         
         return df
+
+    def _decode_csv(self, content: bytes) -> tuple[str, str]:
+        """Décodage CSV UTF-8 puis fallback latin-1."""
+        try:
+            return content.decode("utf-8"), "utf-8"
+        except UnicodeDecodeError:
+            try:
+                return content.decode("latin-1"), "latin-1"
+            except Exception as e:
+                raise ValueError("Encodage invalide") from e
+
+    def _sniff_delimiter(self, text: str) -> str:
+        """Détection du séparateur CSV via csv.Sniffer (fallback: ',')."""
+        sample = text[:2048]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+            return dialect.delimiter
+        except Exception:
+            return ","
+
+    def _validate_limits(self, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+        """Valide limites MVP (lignes/colonnes/cellules). Retourne erreur dict ou None."""
+        rows = len(df)
+        cols = len(df.columns)
+        cells = rows * cols
+
+        if rows > self.MAX_ROWS or cols > self.MAX_COLUMNS or cells > self.MAX_CELLS:
+            return {
+                "success": False,
+                "error_code": "LIMITS_EXCEEDED",
+                "message": "Fichier trop volumineux pour un traitement synchrone",
+                "hint": "Réduisez le nombre de lignes/colonnes ou divisez le fichier.",
+                "details": {
+                    "max_rows": self.MAX_ROWS,
+                    "max_columns": self.MAX_COLUMNS,
+                    "max_cells": self.MAX_CELLS,
+                    "actual_rows": rows,
+                    "actual_columns": cols,
+                    "actual_cells": cells,
+                },
+            }
+        return None
     
     def _generate_summary(self, df: pd.DataFrame) -> Dict[str, Any]:
         """

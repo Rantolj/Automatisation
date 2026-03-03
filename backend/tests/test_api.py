@@ -140,7 +140,7 @@ Fin du fichier."""
 
 
 def test_process_csv_file():
-    """Test de traitement d'un fichier CSV"""
+    """Test de traitement d'un fichier CSV (résumé statistique V1)"""
     try:
         content = """nom,age,ville
 Alice,30,Paris
@@ -159,16 +159,22 @@ Charlie,35,Marseille"""
                 )
             
             result = response.json()
-            analysis = result.get('processing_result', {}).get('analysis', {})
+            processing = result.get('processing_result', {})
+            summary = processing.get('summary', {})
+            structure = summary.get('structure', {})
+            columns = summary.get('columns', [])
+            preview = processing.get('preview', {})
             
             success = (
                 response.status_code == 200 and
-                analysis.get('column_count') == 3 and
-                analysis.get('data_row_count') == 3
+                processing.get('success') == True and
+                structure.get('column_count') == 3 and
+                structure.get('row_count') == 3 and
+                len(columns) == 3
             )
             
             print_result("Process CSV File", success,
-                        f"Columns: {analysis.get('headers')}, Rows: {analysis.get('data_row_count')}")
+                        f"Columns: {structure.get('column_count')}, Rows: {structure.get('row_count')}")
             return success
         finally:
             os.unlink(temp_path)
@@ -276,6 +282,36 @@ def test_upload_without_file():
         return False
 
 
+def test_process_unsupported_format_should_fail():
+    """Test: format non supporté doit renvoyer une erreur claire"""
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.exe', delete=False, encoding='utf-8') as f:
+            f.write("fake")
+            temp_path = f.name
+
+        try:
+            with open(temp_path, 'rb') as f:
+                response = requests.post(
+                    f"{BASE_URL}/process",
+                    files={"file": ("bad.exe", f, "application/octet-stream")}
+                )
+
+            # L'API doit répondre 415 et fournir un error_code
+            body = response.json()
+            success = response.status_code == 415 and body.get("error_code") == "UNSUPPORTED_FORMAT"
+            print_result(
+                "Process Unsupported Format (should fail)",
+                success,
+                f"Status: {response.status_code}, error_code: {body.get('error_code')}"
+            )
+            return success
+        finally:
+            os.unlink(temp_path)
+    except Exception as e:
+        print_result("Process Unsupported Format (should fail)", False, str(e))
+        return False
+
+
 def run_all_tests():
     """Exécute tous les tests et affiche un résumé"""
     
@@ -310,6 +346,7 @@ def run_all_tests():
     results.append(("Process CSV File", test_process_csv_file()))
     results.append(("Process JSON File", test_process_json_file()))
     results.append(("Process Invalid JSON", test_process_invalid_json()))
+    results.append(("Process Unsupported Format", test_process_unsupported_format_should_fail()))
     
     # Résumé
     print_header("RÉSUMÉ")
