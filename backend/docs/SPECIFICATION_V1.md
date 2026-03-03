@@ -206,6 +206,65 @@ L'application génère un **résumé statistique intelligent** à partir d'un fi
 | Lisibilité | JSON exploitable directement par l'app mobile |
 | Robustesse | Erreurs capturées et messages explicites |
 
+### Contraintes MVP (obligatoires pour V1)
+
+Pour garantir sécurité, fiabilité et une UX prévisible, la V1 impose les contraintes suivantes.
+
+- **Whitelist formats**
+  - Acceptés : `.csv`, `.xlsx`, `.xls`, `.json`, `.txt`.
+  - Réponse si non autorisé : **415 Unsupported Media Type**.
+  - Exemple d'erreur JSON :
+    {
+      "success": false,
+      "error_code": "UNSUPPORTED_FORMAT",
+      "message": "Format .exe non autorisé",
+      "hint": "Formats acceptés : .csv, .xlsx, .json"
+    }
+
+- **Taille maximale du fichier**
+  - **10 MB** (configurable).
+  - Réponse si dépassé : **413 Payload Too Large**.
+  - Hint : proposer de diviser le fichier ou d'utiliser un mode batch (Phase 2).
+
+- **Limites lignes / colonnes**
+  - Recommandé : **≤ 10 000 lignes** et **≤ 200 colonnes** (ou plafond cellules totales).
+  - Réponse si dépassé : **422 Unprocessable Entity** avec message explicite.
+
+- **Timeout synchronisé**
+  - Durée max pour traitement synchrone : **10 secondes**.
+  - Comportement V1 : si dépassement, renvoyer **504 Gateway Timeout** avec suggestion de réessayer/segmenter.
+  - Plan V2 : basculer les gros traitements en tâche asynchrone (202 Accepted + jobId).
+
+- **Détection d'encodage et délimiteur CSV**
+  - Support UTF‑8 / latin‑1 ; détection automatique du séparateur.
+  - Si non lisible → **422 Unprocessable Entity** (message : "Encodage invalide / séparateur inconnu").
+
+- **Sanitisation des noms de fichiers**
+  - Supprimer les chemins, normaliser le nom, empêcher l'injection de caractères dangereux.
+
+- **Rate limiting basique (MVP)**
+  - **30 requêtes / minute / IP** (valeur par défaut, configurable).
+  - Réponse en dépassement : **429 Too Many Requests** avec header `Retry-After`.
+
+- **Validation d'entrée (Pydantic)**
+  - Tous les paramètres additionnels (sheetIndex, options) validés → 422 si invalides.
+
+### Erreurs & messages standardisés (exemples)
+
+| Condition | HTTP | error_code | hint |
+|-----------|------|------------|------|
+| Format non supporté | 415 | UNSUPPORTED_FORMAT | Indiquer formats acceptés |
+| Fichier trop volumineux | 413 | FILE_TOO_LARGE | Proposer division/batch |
+| Trop de lignes/colonnes | 422 | LIMITS_EXCEEDED | Préciser limite actuelle |
+| Encodage invalide | 422 | INVALID_ENCODING | Indiquer encodages supportés |
+| Rate limit dépassé | 429 | RATE_LIMIT | Indiquer Retry-After |
+
+### Tests d'acceptation à ajouter (MVP)
+
+- Test unitaires : validation de taille, validation d'extension, détection d'encodage, sanitisation nom fichier.
+- Tests d'intégration : upload d'un fichier >10MB, fichier CSV avec séparateur inconnu, dépassement lignes/colonnes.
+- Test de charge basique : vérifier 429 après 30 requêtes/min (mock ou script).
+
 ---
 
 ## 8. Endpoint API

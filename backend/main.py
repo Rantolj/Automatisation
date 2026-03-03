@@ -19,13 +19,20 @@ Justification :
 =============================================================================
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
+import asyncio
+import time
+import uuid
+import re
+
+import anyio
 
 # Import des services de traitement
 from services.file_processor import FileProcessor
@@ -66,10 +73,176 @@ statistical_service = StatisticalSummaryService()
 # Extensions pour le résumé statistique (V1)
 STATISTICAL_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
 
+# =============================================================================
+# CONTRAINTES MVP (V1)
+# =============================================================================
+
+# Formats acceptés (whitelist)
+ALLOWED_EXTENSIONS = {'.csv', '.xlsx', '.xls', '.json', '.txt'}
+
+# Taille max (10 MB)
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+
+# Timeout de traitement synchrone (en secondes)
+PROCESS_TIMEOUT_SECONDS = 10
+
+# Rate limit basique (30 req/min/IP)
+RATE_LIMIT_REQUESTS_PER_WINDOW = 30
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+# Stockage en mémoire pour rate limiting (MVP)
+_rate_limit_store = {}
+
 
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
+
+
+def _wants_html(request: Request) -> bool:
+    """Retourne True si le client préfère une réponse HTML (typiquement un navigateur)."""
+    accept = (request.headers.get("accept") or "").lower()
+    return ("text/html" in accept) and ("application/json" not in accept)
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Sanitise un nom de fichier pour éviter chemins et caractères dangereux."""
+    # Retirer les chemins potentiels
+    name = os.path.basename(filename)
+    # Remplacer caractères non sûrs
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+    # Empêcher les noms vides
+    return name or "uploaded_file"
+
+
+def _error_payload(
+    *,
+    request_id: str,
+    error_code: str,
+    message: str,
+    hint: str | None = None,
+    details: dict | None = None,
+):
+    payload = {
+        "success": False,
+        "error_code": error_code,
+        "message": message,
+        "request_id": request_id,
+    }
+    if hint:
+        payload["hint"] = hint
+    if details:
+        payload["details"] = details
+    return payload
+
+
+def _error_html(*, request_id: str, error_code: str, message: str, hint: str | None = None) -> str:
+    hint_html = f"<p><b>Suggestion</b> : {hint}</p>" if hint else ""
+    return f"""<!doctype html>
+<html lang=\"fr\">
+  <head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <title>Erreur API</title>
+  </head>
+  <body style=\"font-family: sans-serif; margin: 24px;\">
+    <h1>Une erreur est survenue</h1>
+    <p><b>Code</b> : {error_code}</p>
+    <p><b>Message</b> : {message}</p>
+    {hint_html}
+    <hr />
+    <p><b>Request ID</b> : {request_id}</p>
+  </body>
+</html>"""
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Ne pas limiter l'accès à /docs et /redoc (aide dev)
+    if request.url.path.startswith("/docs") or request.url.path.startswith("/redoc") or request.url.path.startswith("/openapi"):
+        return await call_next(request)
+
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    timestamps = _rate_limit_store.get(ip, [])
+    timestamps = [t for t in timestamps if t >= window_start]
+    if len(timestamps) >= RATE_LIMIT_REQUESTS_PER_WINDOW:
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        retry_after = 5
+        payload = _error_payload(
+            request_id=request_id,
+            error_code="RATE_LIMIT",
+            message="Trop de requêtes, veuillez réessayer plus tard",
+            hint=f"Attendez {retry_after} secondes puis réessayez.",
+            details={"limit": RATE_LIMIT_REQUESTS_PER_WINDOW, "window_seconds": RATE_LIMIT_WINDOW_SECONDS},
+        )
+        if _wants_html(request):
+            return HTMLResponse(_error_html(request_id=request_id, error_code="RATE_LIMIT", message=payload["message"], hint=payload.get("hint")), status_code=429, headers={"Retry-After": str(retry_after), "x-request-id": request_id})
+        return JSONResponse(payload, status_code=429, headers={"Retry-After": str(retry_after), "x-request-id": request_id})
+
+    timestamps.append(now)
+    _rate_limit_store[ip] = timestamps
+    return await call_next(request)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    # Supporter detail en str ou dict
+    if isinstance(exc.detail, dict):
+        error_code = exc.detail.get("error_code", "HTTP_ERROR")
+        message = exc.detail.get("message", "Erreur")
+        hint = exc.detail.get("hint")
+        details = exc.detail.get("details")
+    else:
+        error_code = "HTTP_ERROR"
+        message = str(exc.detail)
+        hint = None
+        details = None
+
+    payload = _error_payload(request_id=request_id, error_code=error_code, message=message, hint=hint, details=details)
+    if _wants_html(request):
+        return HTMLResponse(_error_html(request_id=request_id, error_code=error_code, message=message, hint=hint), status_code=exc.status_code)
+    return JSONResponse(payload, status_code=exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    payload = _error_payload(
+        request_id=request_id,
+        error_code="VALIDATION_ERROR",
+        message="Requête invalide",
+        hint="Vérifiez les champs requis et le type de données.",
+        details={"errors": exc.errors()},
+    )
+    if _wants_html(request):
+        return HTMLResponse(_error_html(request_id=request_id, error_code="VALIDATION_ERROR", message=payload["message"], hint=payload.get("hint")), status_code=422)
+    return JSONResponse(payload, status_code=422)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    payload = _error_payload(
+        request_id=request_id,
+        error_code="INTERNAL_ERROR",
+        message="Erreur interne du serveur",
+        hint="Réessayez. Si le problème persiste, contactez le support avec le Request ID.",
+    )
+    if _wants_html(request):
+        return HTMLResponse(_error_html(request_id=request_id, error_code="INTERNAL_ERROR", message=payload["message"], hint=payload.get("hint")), status_code=500)
+    return JSONResponse(payload, status_code=500)
 
 @app.get("/")
 async def root():
@@ -126,40 +299,59 @@ async def upload_file(file: UploadFile = File(...)):
     
     # Validation basique : le fichier a-t-il un nom ?
     if not file.filename:
+        raise HTTPException(status_code=400, detail={"error_code": "MISSING_FILENAME", "message": "Le fichier doit avoir un nom"})
+
+    original_name = file.filename
+    sanitized_name = _sanitize_filename(original_name)
+    extension = Path(sanitized_name).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400,
-            detail="Le fichier doit avoir un nom"
+            status_code=415,
+            detail={
+                "error_code": "UNSUPPORTED_FORMAT",
+                "message": f"Format non supporté: {extension}",
+                "hint": "Formats acceptés : .csv, .xlsx, .xls, .json, .txt",
+                "details": {"allowed_extensions": sorted(ALLOWED_EXTENSIONS)},
+            },
         )
     
     # Génération d'un nom unique pour éviter les collisions
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_filename = f"{timestamp}_{file.filename}"
+    safe_filename = f"{timestamp}_{sanitized_name}"
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     
     # Sauvegarde du fichier
     try:
         contents = await file.read()
+        file_size = len(contents)
+        if file_size > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error_code": "FILE_TOO_LARGE",
+                    "message": f"Fichier trop volumineux (max {MAX_FILE_SIZE_BYTES} bytes)",
+                    "hint": "Réduisez la taille du fichier ou divisez-le en plusieurs fichiers.",
+                    "details": {"max_bytes": MAX_FILE_SIZE_BYTES, "actual_bytes": file_size},
+                },
+            )
+
         with open(file_path, "wb") as f:
             f.write(contents)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de la sauvegarde : {str(e)}"
-        )
-    
-    # Calcul de la taille
-    file_size = len(contents)
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail={"error_code": "UPLOAD_FAILED", "message": "Erreur lors de la sauvegarde", "details": {"reason": str(e)}})
     
     return {
         "success": True,
         "message": "Fichier uploadé avec succès",
         "file_info": {
-            "original_name": file.filename,
+            "original_name": original_name,
+            "sanitized_name": sanitized_name,
             "saved_name": safe_filename,
             "size_bytes": file_size,
             "size_readable": _format_size(file_size),
             "content_type": file.content_type,
-            "path": file_path
         }
     }
 
@@ -189,45 +381,80 @@ async def process_file(file: UploadFile = File(...)):
     """
     
     if not file.filename:
-        raise HTTPException(status_code=400, detail="Fichier requis")
+        raise HTTPException(status_code=400, detail={"error_code": "MISSING_FILE", "message": "Fichier requis"})
+
+    original_name = file.filename
+    sanitized_name = _sanitize_filename(original_name)
+    extension = Path(sanitized_name).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error_code": "UNSUPPORTED_FORMAT",
+                "message": f"Format non supporté: {extension}",
+                "hint": "Formats acceptés : .csv, .xlsx, .xls, .json, .txt",
+                "details": {"allowed_extensions": sorted(ALLOWED_EXTENSIONS)},
+            },
+        )
     
     # Lecture du contenu
     try:
         contents = await file.read()
     except Exception as e:
+        raise HTTPException(status_code=500, detail={"error_code": "READ_FAILED", "message": "Erreur de lecture du fichier", "details": {"reason": str(e)}})
+
+    file_size = len(contents)
+    if file_size > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
-            status_code=500,
-            detail=f"Erreur de lecture : {str(e)}"
+            status_code=413,
+            detail={
+                "error_code": "FILE_TOO_LARGE",
+                "message": f"Fichier trop volumineux (max 10MB)",
+                "hint": "Réduisez la taille du fichier ou divisez-le en plusieurs fichiers.",
+                "details": {"max_bytes": MAX_FILE_SIZE_BYTES, "actual_bytes": file_size},
+            },
         )
-    
-    # Détection de l'extension pour router vers le bon service
-    extension = Path(file.filename).suffix.lower()
-    
-    try:
-        # Fichiers tabulaires (Excel, CSV) → Résumé Statistique V1
+
+    def _process_sync():
         if extension in STATISTICAL_EXTENSIONS:
-            result = statistical_service.analyze(
-                filename=file.filename,
-                content=contents,
-                content_type=file.content_type
-            )
-        # Autres fichiers → Traitement basique
-        else:
-            result = processor.process(
-                filename=file.filename,
-                content=contents,
-                content_type=file.content_type
-            )
-    except Exception as e:
+            return statistical_service.analyze(filename=sanitized_name, content=contents, content_type=file.content_type)
+        return processor.process(filename=sanitized_name, content=contents, content_type=file.content_type)
+
+    try:
+        result = await asyncio.wait_for(anyio.to_thread.run_sync(_process_sync), timeout=PROCESS_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
         raise HTTPException(
-            status_code=500,
-            detail=f"Erreur de traitement : {str(e)}"
+            status_code=504,
+            detail={
+                "error_code": "TIMEOUT",
+                "message": "Le traitement a dépassé le temps maximum",
+                "hint": "Essayez de réduire la taille du fichier ou de le segmenter.",
+                "details": {"timeout_seconds": PROCESS_TIMEOUT_SECONDS},
+            },
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error_code": "PROCESSING_FAILED", "message": "Erreur de traitement", "details": {"reason": str(e)}})
+
+    # Si le service retourne une erreur structurée, mapper en code HTTP cohérent
+    if isinstance(result, dict) and result.get("success") is False:
+        error_code = result.get("error_code") or "PROCESSING_ERROR"
+        message = result.get("message") or result.get("error") or "Erreur de traitement"
+        hint = result.get("hint")
+        details = result.get("details")
+        status_map = {
+            "UNSUPPORTED_FORMAT": 415,
+            "FILE_TOO_LARGE": 413,
+            "LIMITS_EXCEEDED": 422,
+            "INVALID_ENCODING": 422,
+            "INVALID_CSV": 422,
+        }
+        raise HTTPException(status_code=status_map.get(error_code, 422), detail={"error_code": error_code, "message": message, "hint": hint, "details": details})
     
     return {
         "success": result.get("success", True),
-        "filename": file.filename,
-        "file_size": _format_size(len(contents)),
+        "filename": original_name,
+        "sanitized_filename": sanitized_name,
+        "file_size": _format_size(file_size),
         "processing_result": result,
         "processed_at": datetime.now().isoformat()
     }
