@@ -43,7 +43,10 @@ class StatisticalSummaryService:
     """
     
     # Extensions supportées
-    SUPPORTED_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
+    elif extension == '.xlsx':
+        df = pd.read_excel(buffer, engine='openpyxl')
+    elif extension == '.xls':
+        df = pd.read_excel(buffer, engine='xlrd')
 
     # Limites MVP (évite traitements trop lourds en synchrone)
     MAX_ROWS = 10_000

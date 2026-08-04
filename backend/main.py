@@ -43,35 +43,43 @@ from services.statistical_summary import StatisticalSummaryService
 # =============================================================================
 
 app = FastAPI(
-    title="API Automatisation - Phase 1",
+    title=settings.app_name,
     description="Backend Python pour traitement de fichiers depuis application mobile",
-    version="1.0.0"
+    version=settings.api_version
 )
 
-# Configuration CORS pour permettre les appels depuis l'app mobile
-# En Phase 1, on autorise tout. Phase 2 : restreindre aux origines légitimes
+# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À restreindre en production
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Dossiers de travail
-UPLOAD_DIR = "uploads"
-OUTPUT_DIR = "outputs"
-
 # Création des dossiers s'ils n'existent pas
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(settings.upload_dir, exist_ok=True)
+os.makedirs(settings.output_dir, exist_ok=True)
 
 # Instances des services de traitement
 processor = FileProcessor()
 statistical_service = StatisticalSummaryService()
 
-# Extensions pour le résumé statistique (V1)
-STATISTICAL_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
+# =============================================================================
+# VARIABLES DEPUIS LA CONFIG
+# =============================================================================
+
+STATISTICAL_EXTENSIONS = settings.statistical_extensions
+ALLOWED_EXTENSIONS = settings.allowed_extensions
+MAX_FILE_SIZE_BYTES = settings.max_file_size_bytes
+PROCESS_TIMEOUT_SECONDS = settings.process_timeout_seconds
+RATE_LIMIT_REQUESTS_PER_WINDOW = settings.rate_limit_requests_per_window
+RATE_LIMIT_WINDOW_SECONDS = settings.rate_limit_window_seconds
+UPLOAD_DIR = settings.upload_dir
+OUTPUT_DIR = settings.output_dir
+
+# Stockage en mémoire pour rate limiting (MVP)
+_rate_limit_store = {}
 
 # =============================================================================
 # CONTRAINTES MVP (V1)

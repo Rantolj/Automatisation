@@ -1,369 +1,158 @@
 """
-=============================================================================
-SCRIPT DE TEST - Phase 1
-=============================================================================
-
-Script simple pour tester l'API sans framework de test.
-Exécutable directement pour valider le bon fonctionnement.
-
-Usage :
-    1. Lancer le serveur : python main.py
-    2. Dans un autre terminal : python tests/test_api.py
-
-=============================================================================
+Tests API automatisés avec FastAPI TestClient
+À lancer avec: pytest tests/test_api.py -v
 """
 
-import requests
-import json
+import pytest
 import tempfile
-import os
-from datetime import datetime
+import json
+from fastapi.testclient import TestClient
+from main import app
 
-# Configuration
-BASE_URL = "http://localhost:8000"
-
-# Couleurs pour l'affichage console
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    END = '\033[0m'
+client = TestClient(app)
 
 
-def print_header(title: str):
-    """Affiche un en-tête de section"""
-    print(f"\n{Colors.BLUE}{'='*60}{Colors.END}")
-    print(f"{Colors.BLUE}{title}{Colors.END}")
-    print(f"{Colors.BLUE}{'='*60}{Colors.END}")
+class TestHealthAndRoot:
+    """Tests des endpoints basiques"""
+    
+    def test_root_endpoint(self):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json()["status"] == "online"
+    
+    def test_health_check(self):
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "healthy"
 
 
-def print_result(test_name: str, success: bool, details: str = ""):
-    """Affiche le résultat d'un test"""
-    status = f"{Colors.GREEN}✓ PASS{Colors.END}" if success else f"{Colors.RED}✗ FAIL{Colors.END}"
-    print(f"{status} - {test_name}")
-    if details:
-        print(f"    {Colors.YELLOW}{details}{Colors.END}")
-
-
-def test_health_check():
-    """Test du endpoint /health"""
-    try:
-        response = requests.get(f"{BASE_URL}/health")
-        success = response.status_code == 200 and response.json().get("status") == "healthy"
-        print_result("Health Check", success, f"Status: {response.json().get('status')}")
-        return success
-    except Exception as e:
-        print_result("Health Check", False, str(e))
-        return False
-
-
-def test_root_endpoint():
-    """Test du endpoint racine /"""
-    try:
-        response = requests.get(f"{BASE_URL}/")
-        success = response.status_code == 200 and "status" in response.json()
-        print_result("Root Endpoint", success)
-        return success
-    except Exception as e:
-        print_result("Root Endpoint", False, str(e))
-        return False
-
-
-def test_upload_text_file():
-    """Test d'upload d'un fichier texte"""
-    try:
-        # Création d'un fichier temporaire
-        content = "Ceci est un test.\nDeuxième ligne.\nTroisième ligne."
+class TestUpload:
+    """Tests de l'endpoint /upload"""
+    
+    def test_upload_text_file_success(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("Test content")
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/upload",
+                    files={"file": ("test.txt", upload_file, "text/plain")}
+                )
         
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert "file_info" in response.json()
+    
+    def test_upload_unsupported_format(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.exe', delete=False) as f:
+            f.write("fake")
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/upload",
+                    files={"file": ("bad.exe", upload_file)}
+                )
+        
+        assert response.status_code == 415
+        assert response.json()["error_code"] == "UNSUPPORTED_FORMAT"
+    
+    def test_upload_no_file(self):
+        response = client.post("/upload")
+        assert response.status_code == 422
+
+
+class TestProcess:
+    """Tests de l'endpoint /process"""
+    
+    def test_process_text_file(self):
+        content = "Line 1\nLine 2\nLine 3"
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write(content)
-            temp_path = f.name
-        
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/upload",
-                    files={"file": ("test.txt", f, "text/plain")}
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/process",
+                    files={"file": ("test.txt", upload_file, "text/plain")}
                 )
-            
-            success = response.status_code == 200 and response.json().get("success") == True
-            print_result("Upload Text File", success, 
-                        f"Size: {response.json().get('file_info', {}).get('size_readable', 'N/A')}")
-            return success
-        finally:
-            os.unlink(temp_path)
-            
-    except Exception as e:
-        print_result("Upload Text File", False, str(e))
-        return False
-
-
-def test_process_text_file():
-    """Test de traitement d'un fichier texte"""
-    try:
-        content = """Voici un fichier de test.
-Il contient plusieurs lignes.
-Chaque ligne est analysée.
-Le traitement compte les mots et caractères.
-Fin du fichier."""
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+        assert "processing_result" in result
+    
+    def test_process_csv_file(self):
+        content = "nom,age\nAlice,30\nBob,25"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
-            temp_path = f.name
-        
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/process",
-                    files={"file": ("test.txt", f, "text/plain")}
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/process",
+                    files={"file": ("data.csv", upload_file, "text/csv")}
                 )
-            
-            result = response.json()
-            analysis = result.get('processing_result', {}).get('analysis', {})
-            
-            success = (
-                response.status_code == 200 and 
-                result.get("success") == True and
-                analysis.get('line_count', 0) == 5
-            )
-            
-            print_result("Process Text File", success,
-                        f"Lines: {analysis.get('line_count')}, Words: {analysis.get('word_count')}")
-            return success
-        finally:
-            os.unlink(temp_path)
-            
-    except Exception as e:
-        print_result("Process Text File", False, str(e))
-        return False
-
-
-def test_process_csv_file():
-    """Test de traitement d'un fichier CSV (résumé statistique V1)"""
-    try:
-        content = """nom,age,ville
-Alice,30,Paris
-Bob,25,Lyon
-Charlie,35,Marseille"""
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as f:
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+        assert "summary" in result["processing_result"]
+    
+    def test_process_json_file(self):
+        content = '{"name": "test", "value": 123}'
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             f.write(content)
-            temp_path = f.name
-        
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/process",
-                    files={"file": ("data.csv", f, "text/csv")}
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/process",
+                    files={"file": ("config.json", upload_file, "application/json")}
                 )
-            
-            result = response.json()
-            processing = result.get('processing_result', {})
-            summary = processing.get('summary', {})
-            structure = summary.get('structure', {})
-            columns = summary.get('columns', [])
-            preview = processing.get('preview', {})
-            
-            success = (
-                response.status_code == 200 and
-                processing.get('success') == True and
-                structure.get('column_count') == 3 and
-                structure.get('row_count') == 3 and
-                len(columns) == 3
-            )
-            
-            print_result("Process CSV File", success,
-                        f"Columns: {structure.get('column_count')}, Rows: {structure.get('row_count')}")
-            return success
-        finally:
-            os.unlink(temp_path)
-            
-    except Exception as e:
-        print_result("Process CSV File", False, str(e))
-        return False
-
-
-def test_process_json_file():
-    """Test de traitement d'un fichier JSON"""
-    try:
-        data = {
-            "name": "Test Project",
-            "version": "1.0.0",
-            "features": ["upload", "process", "download"],
-            "config": {
-                "debug": True,
-                "port": 8000
-            }
-        }
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
-            json.dump(data, f)
-            temp_path = f.name
-        
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/process",
-                    files={"file": ("config.json", f, "application/json")}
-                )
-            
-            result = response.json()
-            processing = result.get('processing_result', {})
-            
-            success = (
-                response.status_code == 200 and
-                processing.get('valid') == True and
-                processing.get('structure', {}).get('type') == 'dict'
-            )
-            
-            print_result("Process JSON File", success,
-                        f"Valid: {processing.get('valid')}, Keys: {processing.get('structure', {}).get('key_count')}")
-            return success
-        finally:
-            os.unlink(temp_path)
-            
-    except Exception as e:
-        print_result("Process JSON File", False, str(e))
-        return False
-
-
-def test_process_invalid_json():
-    """Test de traitement d'un JSON invalide"""
-    try:
-        # JSON invalide (manque une accolade)
-        content = '{"name": "test", "value": '
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
-            f.write(content)
-            temp_path = f.name
-        
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/process",
-                    files={"file": ("invalid.json", f, "application/json")}
-                )
-            
-            result = response.json()
-            processing = result.get('processing_result', {})
-            
-            # Le test réussit si l'API détecte bien que le JSON est invalide
-            success = (
-                response.status_code == 200 and
-                processing.get('valid') == False
-            )
-            
-            print_result("Process Invalid JSON", success,
-                        f"Correctly detected as invalid: {processing.get('valid') == False}")
-            return success
-        finally:
-            os.unlink(temp_path)
-            
-    except Exception as e:
-        print_result("Process Invalid JSON", False, str(e))
-        return False
-
-
-def test_upload_without_file():
-    """Test d'upload sans fichier (doit échouer)"""
-    try:
-        response = requests.post(f"{BASE_URL}/upload")
-        
-        # Doit retourner une erreur 422 (Unprocessable Entity)
-        success = response.status_code == 422
-        
-        print_result("Upload Without File (should fail)", success,
-                    f"Status code: {response.status_code} (expected 422)")
-        return success
-        
-    except Exception as e:
-        print_result("Upload Without File", False, str(e))
-        return False
-
-
-def test_process_unsupported_format_should_fail():
-    """Test: format non supporté doit renvoyer une erreur claire"""
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.exe', delete=False, encoding='utf-8') as f:
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+    
+    def test_process_unsupported_format(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.exe', delete=False) as f:
             f.write("fake")
-            temp_path = f.name
-
-        try:
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    f"{BASE_URL}/process",
-                    files={"file": ("bad.exe", f, "application/octet-stream")}
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/process",
+                    files={"file": ("bad.exe", upload_file)}
                 )
-
-            # L'API doit répondre 415 et fournir un error_code
-            body = response.json()
-            success = response.status_code == 415 and body.get("error_code") == "UNSUPPORTED_FORMAT"
-            print_result(
-                "Process Unsupported Format (should fail)",
-                success,
-                f"Status: {response.status_code}, error_code: {body.get('error_code')}"
-            )
-            return success
-        finally:
-            os.unlink(temp_path)
-    except Exception as e:
-        print_result("Process Unsupported Format (should fail)", False, str(e))
-        return False
+        
+        assert response.status_code == 415
+        assert response.json()["error_code"] == "UNSUPPORTED_FORMAT"
 
 
-def run_all_tests():
-    """Exécute tous les tests et affiche un résumé"""
+class TestErrors:
+    """Tests de gestion d'erreurs"""
     
-    print_header("TESTS API - Phase 1")
-    print(f"URL: {BASE_URL}")
-    print(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Vérification que le serveur est accessible
-    print_header("1. Tests de connectivité")
-    
-    try:
-        requests.get(f"{BASE_URL}/health", timeout=2)
-    except requests.exceptions.ConnectionError:
-        print(f"{Colors.RED}ERREUR: Le serveur n'est pas accessible sur {BASE_URL}{Colors.END}")
-        print(f"{Colors.YELLOW}Lancez le serveur avec: python main.py{Colors.END}")
-        return
-    
-    results = []
-    
-    # Tests de base
-    results.append(("Health Check", test_health_check()))
-    results.append(("Root Endpoint", test_root_endpoint()))
-    
-    # Tests d'upload
-    print_header("2. Tests d'upload")
-    results.append(("Upload Text File", test_upload_text_file()))
-    results.append(("Upload Without File", test_upload_without_file()))
-    
-    # Tests de traitement
-    print_header("3. Tests de traitement")
-    results.append(("Process Text File", test_process_text_file()))
-    results.append(("Process CSV File", test_process_csv_file()))
-    results.append(("Process JSON File", test_process_json_file()))
-    results.append(("Process Invalid JSON", test_process_invalid_json()))
-    results.append(("Process Unsupported Format", test_process_unsupported_format_should_fail()))
-    
-    # Résumé
-    print_header("RÉSUMÉ")
-    passed = sum(1 for _, success in results if success)
-    total = len(results)
-    
-    print(f"\nTests réussis: {passed}/{total}")
-    
-    if passed == total:
-        print(f"{Colors.GREEN}✓ Tous les tests sont passés !{Colors.END}")
-    else:
-        print(f"{Colors.RED}✗ Certains tests ont échoué{Colors.END}")
-        print("\nTests échoués:")
-        for name, success in results:
-            if not success:
-                print(f"  - {name}")
+    def test_error_payload_structure(self):
+        """Vérifie que les erreurs ont le bon format"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.exe', delete=False) as f:
+            f.write("fake")
+            f.flush()
+            
+            with open(f.name, 'rb') as upload_file:
+                response = client.post(
+                    "/process",
+                    files={"file": ("bad.exe", upload_file)}
+                )
+        
+        assert response.status_code == 415
+        data = response.json()
+        assert "error_code" in data
+        assert "message" in data
+        assert "request_id" in data
+        assert data["success"] is False
 
 
 if __name__ == "__main__":
-    run_all_tests()
+    pytest.main([__file__, "-v"])

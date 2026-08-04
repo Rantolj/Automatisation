@@ -88,3 +88,5 @@ openpyxl==3.1.2
 # passlib[bcrypt]==1.7.4  # Hash de mots de passe
 #
 # =============================================================================
+xlrd==2.0.1
+pydantic-settings==2.1.0    
