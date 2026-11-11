@@ -43,10 +43,7 @@ class StatisticalSummaryService:
     """
     
     # Extensions supportées
-    elif extension == '.xlsx':
-        df = pd.read_excel(buffer, engine='openpyxl')
-    elif extension == '.xls':
-        df = pd.read_excel(buffer, engine='xlrd')
+    SUPPORTED_EXTENSIONS = {'.xlsx', '.csv'}
 
     # Limites MVP (évite traitements trop lourds en synchrone)
     MAX_ROWS = 10_000
@@ -86,7 +83,7 @@ class StatisticalSummaryService:
                 "success": False,
                 "error_code": "UNSUPPORTED_FORMAT",
                 "message": f"Format non supporté: {extension}",
-                "hint": "Formats acceptés : .csv, .xlsx, .xls",
+                "hint": "Formats acceptés : .csv, .xlsx",
                 "details": {"supported_formats": sorted(self.SUPPORTED_EXTENSIONS)},
             }
         
@@ -139,8 +136,11 @@ class StatisticalSummaryService:
             delimiter = self._sniff_delimiter(text)
             df = pd.read_csv(io.StringIO(text), encoding=encoding, sep=delimiter)
         
-        elif extension in ['.xlsx', '.xls']:
+        elif extension == '.xlsx':
             df = pd.read_excel(buffer, engine='openpyxl')
+        
+        elif extension == '.xls':
+            df = pd.read_excel(buffer, engine='xlrd')
         
         else:
             raise ValueError(f"Format non géré: {extension}")
@@ -473,7 +473,6 @@ def get_supported_formats() -> Dict[str, str]:
     Retourne la liste des formats supportés avec description.
     """
     return {
-        ".xlsx": "Microsoft Excel (format moderne)",
-        ".xls": "Microsoft Excel (format ancien)",
+        ".xlsx": "Microsoft Excel (format moderne XLSX)",
         ".csv": "Fichier CSV (valeurs séparées par virgules)"
     }

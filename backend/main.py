@@ -38,6 +38,9 @@ import anyio
 from services.file_processor import FileProcessor
 from services.statistical_summary import StatisticalSummaryService
 
+# Import de la configuration
+from config import settings
+
 # =============================================================================
 # INITIALISATION DE L'APPLICATION
 # =============================================================================
@@ -77,26 +80,6 @@ RATE_LIMIT_REQUESTS_PER_WINDOW = settings.rate_limit_requests_per_window
 RATE_LIMIT_WINDOW_SECONDS = settings.rate_limit_window_seconds
 UPLOAD_DIR = settings.upload_dir
 OUTPUT_DIR = settings.output_dir
-
-# Stockage en mémoire pour rate limiting (MVP)
-_rate_limit_store = {}
-
-# =============================================================================
-# CONTRAINTES MVP (V1)
-# =============================================================================
-
-# Formats acceptés (whitelist)
-ALLOWED_EXTENSIONS = {'.csv', '.xlsx', '.xls', '.json', '.txt'}
-
-# Taille max (10 MB)
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-
-# Timeout de traitement synchrone (en secondes)
-PROCESS_TIMEOUT_SECONDS = 10
-
-# Rate limit basique (30 req/min/IP)
-RATE_LIMIT_REQUESTS_PER_WINDOW = 30
-RATE_LIMIT_WINDOW_SECONDS = 60
 
 # Stockage en mémoire pour rate limiting (MVP)
 _rate_limit_store = {}
@@ -161,6 +144,401 @@ def _error_html(*, request_id: str, error_code: str, message: str, hint: str | N
     <hr />
     <p><b>Request ID</b> : {request_id}</p>
   </body>
+</html>"""
+
+
+def _home_page_html() -> str:
+        return """<!doctype html>
+<html lang="fr">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>API Automatisation</title>
+        <style>
+            :root {
+                --bg: #0f172a;
+                --panel: rgba(15, 23, 42, 0.82);
+                --panel-2: rgba(30, 41, 59, 0.9);
+                --text: #e2e8f0;
+                --muted: #94a3b8;
+                --accent: #38bdf8;
+                --accent-2: #22c55e;
+                --border: rgba(148, 163, 184, 0.18);
+                --danger: #fb7185;
+            }
+
+            * { box-sizing: border-box; }
+            body {
+                margin: 0;
+                min-height: 100vh;
+                font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                color: var(--text);
+                background:
+                    radial-gradient(circle at top left, rgba(56, 189, 248, 0.22), transparent 30%),
+                    radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 28%),
+                    linear-gradient(160deg, #020617 0%, #0f172a 50%, #111827 100%);
+            }
+
+            .shell {
+                width: min(1180px, calc(100% - 32px));
+                margin: 0 auto;
+                padding: 24px 0 48px;
+            }
+
+            .hero {
+                display: grid;
+                grid-template-columns: 1.25fr 0.75fr;
+                gap: 20px;
+                align-items: stretch;
+            }
+
+            .card {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 24px;
+                box-shadow: 0 24px 80px rgba(2, 6, 23, 0.45);
+                backdrop-filter: blur(18px);
+            }
+
+            .hero-main { padding: 28px; }
+            .kicker {
+                display: inline-flex;
+                gap: 8px;
+                align-items: center;
+                padding: 8px 12px;
+                border-radius: 999px;
+                border: 1px solid var(--border);
+                background: rgba(15, 23, 42, 0.52);
+                color: var(--muted);
+                font-size: 0.92rem;
+            }
+
+            h1 {
+                margin: 18px 0 12px;
+                font-size: clamp(2rem, 4vw, 4.2rem);
+                line-height: 0.98;
+                letter-spacing: -0.04em;
+            }
+
+            .lead {
+                margin: 0;
+                max-width: 62ch;
+                color: var(--muted);
+                font-size: 1.02rem;
+                line-height: 1.7;
+            }
+
+            .metrics {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 12px;
+                margin-top: 22px;
+            }
+
+            .metric {
+                padding: 16px;
+                border-radius: 18px;
+                background: rgba(15, 23, 42, 0.62);
+                border: 1px solid var(--border);
+            }
+
+            .metric .label { color: var(--muted); font-size: 0.82rem; }
+            .metric .value { margin-top: 8px; font-size: 1.2rem; font-weight: 700; }
+
+            .side {
+                padding: 20px;
+                display: grid;
+                gap: 12px;
+            }
+
+            .side h2 {
+                margin: 0 0 6px;
+                font-size: 1.1rem;
+            }
+
+            .check {
+                display: flex;
+                gap: 12px;
+                align-items: flex-start;
+                padding: 14px;
+                border-radius: 16px;
+                border: 1px solid var(--border);
+                background: rgba(15, 23, 42, 0.54);
+            }
+
+            .check .dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                margin-top: 6px;
+                background: var(--accent-2);
+                box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.12);
+            }
+
+            .workspace {
+                margin-top: 20px;
+                display: grid;
+                grid-template-columns: 0.9fr 1.1fr;
+                gap: 18px;
+            }
+
+            .panel {
+                padding: 22px;
+            }
+
+            .panel h2 {
+                margin: 0 0 8px;
+                font-size: 1.2rem;
+            }
+
+            .panel p.sub {
+                margin: 0 0 18px;
+                color: var(--muted);
+            }
+
+            .dropzone {
+                border: 1.5px dashed rgba(56, 189, 248, 0.45);
+                border-radius: 20px;
+                min-height: 240px;
+                display: grid;
+                place-items: center;
+                text-align: center;
+                padding: 22px;
+                background: linear-gradient(180deg, rgba(15, 23, 42, 0.65), rgba(15, 23, 42, 0.35));
+                transition: 180ms ease;
+            }
+
+            .dropzone.dragover {
+                transform: translateY(-2px);
+                border-color: var(--accent);
+                box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.1);
+            }
+
+            .dropzone strong {
+                display: block;
+                font-size: 1.05rem;
+                margin-bottom: 8px;
+            }
+
+            .dropzone small { color: var(--muted); }
+
+            .actions {
+                display: flex;
+                gap: 12px;
+                flex-wrap: wrap;
+                margin-top: 16px;
+            }
+
+            .btn {
+                appearance: none;
+                border: 0;
+                border-radius: 14px;
+                padding: 12px 16px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+            }
+
+            .btn:hover { transform: translateY(-1px); }
+            .btn-primary { background: linear-gradient(135deg, var(--accent), #0ea5e9); color: #02111d; }
+            .btn-secondary { background: rgba(148, 163, 184, 0.18); color: var(--text); border: 1px solid var(--border); }
+            .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+            input[type="file"] { display: none; }
+
+            .result {
+                min-height: 240px;
+                background: rgba(2, 6, 23, 0.4);
+                border: 1px solid var(--border);
+                border-radius: 20px;
+                padding: 18px;
+                overflow: auto;
+            }
+
+            .result pre {
+                margin: 0;
+                white-space: pre-wrap;
+                word-break: break-word;
+                color: #dbeafe;
+                font-size: 0.93rem;
+                line-height: 1.6;
+            }
+
+            .status {
+                margin-top: 14px;
+                min-height: 22px;
+                color: var(--muted);
+            }
+
+            .status.error { color: var(--danger); }
+            .pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 12px;
+                border-radius: 999px;
+                border: 1px solid var(--border);
+                background: rgba(15, 23, 42, 0.5);
+                color: var(--muted);
+                font-size: 0.84rem;
+            }
+
+            @media (max-width: 920px) {
+                .hero, .workspace { grid-template-columns: 1fr; }
+                .metrics { grid-template-columns: 1fr; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="shell">
+            <section class="hero">
+                <div class="card hero-main">
+                    <div class="kicker">API Automatisation <span class="pill">FastAPI</span></div>
+                    <h1>Une vraie page front pour envoyer un fichier et lire le résumé.</h1>
+                    <p class="lead">
+                        Cette interface permet de tester l’API sans Postman ni terminal. Tu glisses un fichier,
+                        tu l’envoies, et le résultat s’affiche directement dans le navigateur.
+                    </p>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Formats</div>
+                            <div class="value">CSV, JSON, TXT, XLSX</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Réponse</div>
+                            <div class="value">Résultat JSON lisible</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">URL</div>
+                            <div class="value">http://localhost:8000</div>
+                        </div>
+                    </div>
+                </div>
+                <aside class="card side">
+                    <div>
+                        <h2>Ce que fait la page</h2>
+                        <p class="lead" style="font-size: .95rem; line-height: 1.65;">
+                            Elle envoie le fichier vers <code>/process</code> et affiche la réponse API en brut.
+                        </p>
+                    </div>
+                    <div class="check"><span class="dot"></span><div><strong>Upload immédiat</strong><div style="color: var(--muted); margin-top: 4px;">Tu sélectionnes un fichier puis tu cliques sur envoyer.</div></div></div>
+                    <div class="check"><span class="dot"></span><div><strong>Retour visuel</strong><div style="color: var(--muted); margin-top: 4px;">La réponse s’affiche en JSON formaté dans le panneau de droite.</div></div></div>
+                    <div class="check"><span class="dot"></span><div><strong>Compatible mobile</strong><div style="color: var(--muted); margin-top: 4px;">L’interface reste lisible sur téléphone et tablette.</div></div></div>
+                </aside>
+            </section>
+
+            <section class="workspace">
+                <div class="card panel">
+                    <h2>Envoyer un fichier</h2>
+                    <p class="sub">Formats acceptés selon le backend : <strong>.csv</strong>, <strong>.xlsx</strong>, <strong>.json</strong>, <strong>.txt</strong>.</p>
+
+                    <div id="dropzone" class="dropzone">
+                        <div>
+                            <strong>Glisse ton fichier ici</strong>
+                            <small>ou clique pour le sélectionner</small>
+                            <div class="actions">
+                                <label class="btn btn-secondary" for="fileInput">Choisir un fichier</label>
+                                <button id="sendBtn" class="btn btn-primary" type="button">Envoyer</button>
+                            </div>
+                            <input id="fileInput" type="file" />
+                            <div id="fileName" class="status">Aucun fichier sélectionné.</div>
+                        </div>
+                    </div>
+
+                    <div id="status" class="status"></div>
+                </div>
+
+                <div class="card panel">
+                    <h2>Résultat</h2>
+                    <p class="sub">La réponse de l’API s’affiche ici.</p>
+                    <div class="result"><pre id="result">Aucun résultat pour le moment.</pre></div>
+                </div>
+            </section>
+        </div>
+
+        <script>
+            const fileInput = document.getElementById('fileInput');
+            const fileName = document.getElementById('fileName');
+            const result = document.getElementById('result');
+            const statusBox = document.getElementById('status');
+            const sendBtn = document.getElementById('sendBtn');
+            const dropzone = document.getElementById('dropzone');
+            let selectedFile = null;
+
+            function setStatus(message, isError = false) {
+                statusBox.textContent = message || '';
+                statusBox.classList.toggle('error', Boolean(isError));
+            }
+
+            function prettyPrint(value) {
+                return JSON.stringify(value, null, 2);
+            }
+
+            fileInput.addEventListener('change', () => {
+                selectedFile = fileInput.files[0] || null;
+                fileName.textContent = selectedFile ? `Fichier sélectionné : ${selectedFile.name}` : 'Aucun fichier sélectionné.';
+                setStatus('');
+            });
+
+            dropzone.addEventListener('click', (event) => {
+                if (event.target === dropzone) {
+                    fileInput.click();
+                }
+            });
+
+            dropzone.addEventListener('dragover', (event) => {
+                event.preventDefault();
+                dropzone.classList.add('dragover');
+            });
+
+            dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+
+            dropzone.addEventListener('drop', (event) => {
+                event.preventDefault();
+                dropzone.classList.remove('dragover');
+                if (event.dataTransfer.files.length) {
+                    selectedFile = event.dataTransfer.files[0];
+                    fileInput.files = event.dataTransfer.files;
+                    fileName.textContent = `Fichier sélectionné : ${selectedFile.name}`;
+                    setStatus('');
+                }
+            });
+
+            async function sendFile() {
+                if (!selectedFile) {
+                    setStatus('Sélectionne un fichier avant de l’envoyer.', true);
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                sendBtn.disabled = true;
+                setStatus('Envoi en cours...');
+                result.textContent = 'Traitement en cours...';
+
+                try {
+                    const response = await fetch('/process', {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    const payload = await response.json();
+                    result.textContent = prettyPrint(payload);
+                    if (!response.ok) {
+                        setStatus(`Erreur HTTP ${response.status}`, true);
+                        return;
+                    }
+                    setStatus('Fichier traité avec succès.');
+                } catch (error) {
+                    result.textContent = String(error);
+                    setStatus('Impossible de joindre l’API.', true);
+                } finally {
+                    sendBtn.disabled = false;
+                }
+            }
+
+            sendBtn.addEventListener('click', sendFile);
+        </script>
+    </body>
 </html>"""
 
 
@@ -253,12 +631,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(payload, status_code=500)
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """
     Point d'entrée racine - Vérification que l'API est en ligne
     
     Usage : Health check depuis l'app mobile ou monitoring
     """
+    if _wants_html(request):
+        return HTMLResponse(_home_page_html())
     return {
         "status": "online",
         "message": "API Automatisation - Phase 1",
